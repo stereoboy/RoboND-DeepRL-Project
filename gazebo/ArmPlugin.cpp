@@ -37,20 +37,21 @@
 
 #define INPUT_WIDTH  64
 #define INPUT_HEIGHT  64
-#define OPTIMIZER "RMSprop"
-#define LEARNING_RATE 0.01f
-#define REPLAY_MEMORY 10000
-#define BATCH_SIZE 32
+//#define OPTIMIZER "RMSprop"
+#define OPTIMIZER "Adam"
+#define LEARNING_RATE 0.001f
+#define REPLAY_MEMORY 20000
+#define BATCH_SIZE 16
 #define USE_LSTM true
-#define LSTM_SIZE 32
+#define LSTM_SIZE 128
 
 /*
 / TODO - Define Reward Parameters
 /
 */
 
-#define REWARD_WIN  1.0f
-#define REWARD_LOSS 0.0f
+#define REWARD_WIN  1000.0f
+#define REWARD_LOSS -1000.0f
 
 // Define Object Names
 #define WORLD_NAME "arm_world"
@@ -263,27 +264,34 @@ void ArmPlugin::onCollisionMsg(ConstContactsPtr &contacts)
 
 		if(DEBUG){std::cout << "Collision between[" << contacts->contact(i).collision1()
 			     << "] and [" << contacts->contact(i).collision2() << "]\n";}
-		{std::cout << "Collision between[" << contacts->contact(i).collision1()
-			     << "] and [" << contacts->contact(i).collision2() << "]\n";}
 
 	
 		/*
 		/ TODO - Check if there is collision between the arm and object, then issue learning reward
 		/
 		*/
-		
 		bool collisionCheck = !strcmp(contacts->contact(i).collision1().c_str(), COLLISION_POINT) && !strcmp(contacts->contact(i).collision2().c_str(), COLLISION_ITEM);
+		collisionCheck |= !strcmp(contacts->contact(i).collision1().c_str(), COLLISION_ITEM) && !strcmp(contacts->contact(i).collision2().c_str(), COLLISION_POINT);
 		if (collisionCheck)
 		{
-			printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!EOE\n");
+			if(DEBUG){printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!EOE\n");}
 			rewardHistory = REWARD_WIN;
 
 			newReward  = true;
-			endEpisode = false;
+			endEpisode = true;
 
 			return;
 		}
-		
+		else if (!strcmp(contacts->contact(i).collision1().c_str(), COLLISION_ITEM) && !strcmp(contacts->contact(i).collision2().c_str(), "arm::link2::collision2"))
+		{
+			if(DEBUG){printf("????????????????????????????????????????????????????????????????????????????????????????????EOE\n");}
+			rewardHistory = REWARD_LOSS;
+
+			newReward  = true;
+			endEpisode = true;
+
+			return;
+		}
 	}
 }
 
@@ -583,24 +591,18 @@ void ArmPlugin::OnUpdate(const common::UpdateInfo& updateInfo)
 
 		// get the bounding box for the gripper		
 		const math::Box& gripBBox = gripper->GetBoundingBox();
-		const float groundContact = 0.05f;
 		
 		/*
 		/ TODO - set appropriate Reward for robot hitting the ground.
 		/
 		*/
 		
-		bool checkGroundContact = !(	propBBox.min.x > gripBBox.max.x ||
-																	propBBox.max.x < gripBBox.min.x ||
-																	propBBox.min.y > gripBBox.max.y ||
-																	propBBox.max.y < gripBBox.min.y ||
-																	propBBox.min.z > gripBBox.max.z ||
-																	propBBox.max.z < gripBBox.min.z );
+		bool checkGroundContact = (gripBBox.min.z  < 0.0f);
+
 		if(checkGroundContact)
 		{
 						
 			if(DEBUG){printf("GROUND CONTACT, EOE\n");}
-			printf("#####################################################################################GROUND CONTACT, EOE\n");
 			rewardHistory = REWARD_LOSS;
 			newReward     = true;
 			endEpisode    = true;
@@ -611,10 +613,10 @@ void ArmPlugin::OnUpdate(const common::UpdateInfo& updateInfo)
 		/
 		*/ 
 		
-		float alpha = 0.7;
+		float alpha = 0.8;
 		if(!checkGroundContact)
 		{
-			const float distGoal = BoxDistance(propBBox, gripBBox); // compute the reward from distance to the goal
+			const float distGoal = BoxDistance(gripBBox, propBBox); // compute the reward from distance to the goal
 
 			if(DEBUG){printf("distance('%s', '%s') = %f\n", gripper->GetName().c_str(), prop->model->GetName().c_str(), distGoal);}
 
@@ -625,9 +627,17 @@ void ArmPlugin::OnUpdate(const common::UpdateInfo& updateInfo)
 
 				// compute the smoothed moving average of the delta of the distance to the goal
 				avgGoalDelta  = (avgGoalDelta * alpha) + (distDelta * (1 - alpha));
-				rewardHistory = rewardHistory + avgGoalDelta;
+				if ( avgGoalDelta < 0.001f)
+				{
+					rewardHistory = -100 * (1 - exp(-distGoal));
+				}
+				else
+				{
+					rewardHistory = 0;
+				}
 				newReward     = true;
 				if(DEBUG){printf("avgGoalDelta  = %f\n", avgGoalDelta);}
+				if(DEBUG){printf("rewardHistory  = %f\n", rewardHistory);}
 			}
 
 			lastGoalDistance = distGoal;
@@ -654,7 +664,6 @@ void ArmPlugin::OnUpdate(const common::UpdateInfo& updateInfo)
 			avgGoalDelta     = 0.0f;
 
 			// track the number of wins and agent accuracy
-			printf(" rewardHistory =%f\n", rewardHistory);
 			if( rewardHistory >= REWARD_WIN )
 				successfulGrabs++;
 
